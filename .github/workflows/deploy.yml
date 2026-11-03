@@ -1,0 +1,95 @@
+# CI/CD: build -> package -> deploy to Elastic Beanstalk (rolling, auto-rollback on failed health checks)
+#
+# Uses GitHub OIDC to assume an IAM role - no AWS access keys are stored in GitHub.
+# Repository variables (Settings -> Secrets and variables -> Actions -> Variables):
+#   AWS_REGION            ap-south-1
+#   AWS_DEPLOY_ROLE_ARN   arn:aws:iam::<account>:role/github-actions-library-deploy
+#   EB_APPLICATION        cst-library
+#   EB_ENVIRONMENT        cst-library-prod
+#   EB_BUCKET             elasticbeanstalk-ap-south-1-<account>
+#   APP_URL               https://your-domain   (smoke test)
+name: Deploy to Elastic Beanstalk
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          npm ci || npm install
+          npm --prefix server ci || npm --prefix server install
+          npm --prefix client ci || npm --prefix client install
+
+      - name: Build and package
+        run: npm run package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle
+          path: build/*.zip
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle
+          path: build
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Upload bundle and create application version
+        run: |
+          VERSION="v-${GITHUB_SHA::7}-$(date +%Y%m%d%H%M%S)"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          aws s3 cp build/library-app.zip "s3://${{ vars.EB_BUCKET }}/cst-library/$VERSION.zip"
+          aws elasticbeanstalk create-application-version \
+            --application-name "${{ vars.EB_APPLICATION }}" \
+            --version-label "$VERSION" \
+            --source-bundle S3Bucket="${{ vars.EB_BUCKET }}",S3Key="cst-library/$VERSION.zip" \
+            --description "${{ github.event.head_commit.message || 'manual deploy' }}" | head -c 0
+
+      - name: Deploy (rolling with additional batch)
+        run: |
+          aws elasticbeanstalk update-environment \
+            --environment-name "${{ vars.EB_ENVIRONMENT }}" \
+            --version-label "$VERSION" > /dev/null
+          aws elasticbeanstalk wait environment-updated --environment-names "${{ vars.EB_ENVIRONMENT }}"
+          HEALTH=$(aws elasticbeanstalk describe-environments --environment-names "${{ vars.EB_ENVIRONMENT }}" \
+            --query 'Environments[0].[Health,VersionLabel]' --output text)
+          echo "Environment: $HEALTH"
+          echo "$HEALTH" | grep -q "$VERSION" || { echo "::error::Deployment rolled back by Elastic Beanstalk"; exit 1; }
+
+      - name: Smoke test
+        if: ${{ vars.APP_URL != '' }}
+        run: curl --fail --retry 5 --retry-delay 10 "${{ vars.APP_URL }}/api/health"
+
+      - name: Update Lambda functions
+        continue-on-error: true
+        run: |
+          aws lambda update-function-code --function-name library-notifier --zip-file fileb://build/lambda-notifier.zip > /dev/null
+          aws lambda update-function-code --function-name library-daily-reminders --zip-file fileb://build/lambda-reminders.zip > /dev/null

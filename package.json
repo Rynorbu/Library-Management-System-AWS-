@@ -1,0 +1,20 @@
+{
+  "name": "cst-library-reservation-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloud-Native Library Book Reservation System (React + Node.js + PostgreSQL on AWS Elastic Beanstalk)",
+  "type": "module",
+  "scripts": {
+    "setup": "npm install && npm --prefix server install && npm --prefix client install",
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "dev": "concurrently -n api,web -c blue,magenta \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "build": "npm --prefix client run build",
+    "package": "node scripts/package.mjs",
+    "test:concurrency": "npm --prefix server run test:concurrency"
+  },
+  "devDependencies": {
+    "archiver": "^7.0.1",
+    "concurrently": "^9.1.0"
+  }
+}
