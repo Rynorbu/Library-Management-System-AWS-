@@ -1,0 +1,33 @@
+%% Figure 3: CI/CD pipeline (.github/workflows/deploy.yml)
+flowchart LR
+    PR([Pull request to main]) --> GH
+    RUN([Run workflow, or a push to main<br/>after hand-off H4]) --> GH
+
+    subgraph GH[GitHub Actions: CI/CD workflow]
+        direction TB
+        T[test job<br/>ESLint + 35 API tests<br/>PostgreSQL 16 service container]
+        B[build job<br/>vite build + npm run package<br/>library-app.zip + 2 Lambda zips]
+        G{Pull request?}
+        OK([Stop: PR checks green])
+        R[production environment<br/>required reviewer approves]
+        K[Sign in to AWS<br/>Lab: session keys in GitHub secrets<br/>Real account: OIDC role]
+        T --> B --> G
+        G -- yes --> OK
+        G -- no --> R --> K
+    end
+
+    subgraph AWS[AWS us-east-1]
+        direction TB
+        S3[(S3: elasticbeanstalk-us-east-1-account<br/>cst-library/v-sha-time.zip)]
+        V[EB create-application-version<br/>description: commit sha]
+        D[EB update-environment<br/>rolling with additional batch, size 1]
+        H{New instances pass<br/>ALB health check<br/>/api/health?}
+        RB[EB rolls back automatically<br/>job fails]
+        ST[Smoke test<br/>curl APP_URL/api/health]
+        LM[Update Lambda code<br/>library-notifier<br/>library-daily-reminders]
+        S3 --> V --> D --> H
+        H -- no --> RB
+        H -- yes --> ST --> LM
+    end
+
+    GH -- "deploy (not on PRs)" --> AWS
