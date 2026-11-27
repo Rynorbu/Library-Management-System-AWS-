@@ -1,5 +1,5 @@
 /**
- * library-daily-reminders  (Node.js 20 runtime, no dependencies)
+ * library-daily-reminders  (Node.js 22 runtime, no dependencies)
  *
  * Trigger: Amazon EventBridge Scheduler, e.g. cron(0 2 * * ? *) = 08:00 Bhutan time.
  *

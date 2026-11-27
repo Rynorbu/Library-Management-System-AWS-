@@ -1,5 +1,5 @@
 /**
- * library-notifier  (Node.js 20 runtime, no dependencies - AWS SDK v3 is built in)
+ * library-notifier  (Node.js 22 runtime, no dependencies - AWS SDK v3 is built in)
  *
  * Trigger: Amazon SQS queue "library-notifications" (batch size 10,
  *          ReportBatchItemFailures enabled, redrive to "library-notifications-dlq"
