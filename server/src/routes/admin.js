@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { query } from '../db/index.js';
+import { query, hasReadReplica } from '../db/index.js';
 import { asyncHandler, parse, pageParams, HttpError, logActivity } from '../utils/http.js';
 import { requireLibrarian } from '../middleware/auth.js';
 import { runDailyJobs } from '../services/reservationService.js';
@@ -58,7 +58,7 @@ router.get(
         cache: cacheMode(),
         notifications: notificationMode(),
         storage: config.s3Bucket ? 's3' : 'local',
-        readReplica: Boolean(config.databaseReadUrl),
+        readReplica: hasReadReplica(),
       },
     });
   }),

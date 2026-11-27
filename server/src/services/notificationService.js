@@ -13,11 +13,17 @@ import { renderEmail } from './emailTemplates.js';
  *      back to /api/internal/notifications/:id/status (status -> 'sent' | 'failed').
  *   4. retryPending() re-publishes any rows still 'queued' (e.g. SQS was briefly unreachable).
  *
+ * Exactly-once publishing with several instances: a row is "leased" through claimed_at.
+ * The instance that inserts a row holds the lease while it publishes. The sweeper on
+ * every instance claims rows atomically (FOR UPDATE SKIP LOCKED), and only rows whose
+ * lease is free or older than CLAIM_LEASE, so two instances never publish the same row.
+ *
  * Without SQS_QUEUE_URL (local development) emails are "delivered" to the console,
  * or sent straight through SES when SES_DIRECT=true.
  */
 
 const MAX_ATTEMPTS = 5;
+const CLAIM_LEASE = '5 minutes'; // a crashed instance's rows are retried after this
 let sqs;
 let ses;
 
@@ -40,9 +46,11 @@ async function sesClient() {
 /** Insert an outbox row. `db` must be the transaction client. */
 export async function queueNotification(db, { user, type, data = {} }) {
   const { subject, text, html } = renderEmail(type, { ...data, user });
+  // claimed_at = now(): this instance publishes the row right after COMMIT, so the
+  // sweepers on other instances leave it alone unless that publish fails.
   const { rows } = await db.query(
-    `INSERT INTO notifications (user_id, type, recipient, subject, body, html)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    `INSERT INTO notifications (user_id, type, recipient, subject, body, html, claimed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, now()) RETURNING *`,
     [user.id, type, user.email, subject, text, html],
   );
   return rows[0];
@@ -94,9 +102,10 @@ export async function dispatch(notifications) {
       await publishOne(n);
     } catch (err) {
       console.error(`[notify] publish failed for #${n.id}:`, err.message);
+      // Release the lease so the next sweep (on any instance) retries it
       await query(
         `UPDATE notifications
-            SET attempts = attempts + 1, error = $2,
+            SET attempts = attempts + 1, error = $2, claimed_at = NULL,
                 status = CASE WHEN attempts + 1 >= $3 THEN 'failed' ELSE status END
           WHERE id = $1`,
         [n.id, String(err.message).slice(0, 500), MAX_ATTEMPTS],
@@ -111,14 +120,27 @@ export function dispatchInBackground(notifications) {
   setImmediate(() => dispatch(notifications).catch((e) => console.error('[notify]', e)));
 }
 
-/** Re-publish rows stuck in 'queued' (outbox sweeper). */
+/**
+ * Re-publish rows stuck in 'queued' (outbox sweeper). Runs every minute on EVERY instance.
+ * The claim is one atomic UPDATE: rows another instance is claiming right now are skipped
+ * (SKIP LOCKED), and rows it has just claimed no longer match (claimed_at is recent),
+ * so each row is published by one instance only (code fix C2: no duplicate emails).
+ */
 export async function retryPending() {
   const { rows } = await query(
-    `SELECT * FROM notifications
-      WHERE status = 'queued' AND attempts < $1 AND created_at < now() - interval '30 seconds'
-      ORDER BY created_at LIMIT 50`,
-    [MAX_ATTEMPTS],
+    `UPDATE notifications SET claimed_at = now()
+      WHERE id IN (
+        SELECT id FROM notifications
+         WHERE status = 'queued' AND attempts < $1
+           AND created_at < now() - interval '30 seconds'
+           AND (claimed_at IS NULL OR claimed_at < now() - $2::interval)
+         ORDER BY created_at
+         LIMIT 50
+         FOR UPDATE SKIP LOCKED)
+      RETURNING *`,
+    [MAX_ATTEMPTS, CLAIM_LEASE],
   );
+  rows.sort((a, b) => a.created_at - b.created_at || a.id - b.id);
   if (rows.length) await dispatch(rows);
   return rows.length;
 }

@@ -24,7 +24,9 @@ const PUBLIC_DIR = path.resolve(__dirname, '../public'); // built React app (cop
 
 export function createApp() {
   const app = express();
-  app.set('trust proxy', 1); // behind the Application Load Balancer
+  // CloudFront -> ALB -> app: trust both hops so req.ip (and the login rate limit) is the
+  // real client, not a CloudFront edge IP shared by everyone (TRUST_PROXY_HOPS, default 2).
+  app.set('trust proxy', config.trustProxyHops);
   app.disable('x-powered-by');
 
   app.use(
