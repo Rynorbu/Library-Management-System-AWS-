@@ -5,7 +5,7 @@ Kelden Phuntsho Dorji · Ranjung Yeshi Norbu · Pema Dolker · Tshering Wangpo D
 
 A self-service library system that replaces the queue at the library desk. Students and staff search the catalogue, see live copy counts and shelf locations, reserve a copy or join a first-come-first-served waitlist, and get an email when a book is ready. Librarians manage the catalogue, check books in and out, and see reports.
 
-**Stack:** React 18 (Vite) · Node.js 20 / Express · PostgreSQL 16 · AWS Elastic Beanstalk, RDS, SQS, Lambda, SES, S3, ElastiCache, Secrets Manager, EventBridge, CloudWatch
+**Stack:** React 18 (Vite) · Node.js 22 / Express · PostgreSQL 16 · AWS Elastic Beanstalk, RDS, SQS, Lambda, SES, S3, ElastiCache, Secrets Manager, EventBridge, CloudWatch
 
 ---
 
@@ -38,7 +38,7 @@ Concurrency is tested: `npm run test:concurrency` sends N simultaneous reserve r
 
 ## Run it locally
 
-Requirements: Node.js 20+, Docker Desktop.
+Requirements: Node.js 22 LTS (20 also works locally), Docker Desktop.
 
 ```bash
 npm run setup          # installs root, server and client dependencies
@@ -97,7 +97,7 @@ server/                Express API (also serves the built SPA in production)
   scripts/             concurrency-test.js
 lambda/notifier        SQS → SES (partial batch failures, DLQ)
 lambda/reminders       EventBridge → /api/internal/jobs/daily
-.github/workflows      CI/CD to Elastic Beanstalk via GitHub OIDC (no stored AWS keys)
+.github/workflows      CI/CD to Elastic Beanstalk (Learner Lab session keys; OIDC in a real account)
 docs/DEPLOYMENT.md     Step-by-step AWS setup
 ```
 
