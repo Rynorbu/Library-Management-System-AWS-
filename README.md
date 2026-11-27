@@ -5,7 +5,7 @@ Kelden Phuntsho Dorji · Ranjung Yeshi Norbu · Pema Dolker · Tshering Wangpo D
 
 A self-service library system that replaces the queue at the library desk. Students and staff search the catalogue, see live copy counts and shelf locations, reserve a copy or join a first-come-first-served waitlist, and get an email when a book is ready. Librarians manage the catalogue, check books in and out, and see reports.
 
-**Stack:** React 18 (Vite) · Node.js 20 / Express · PostgreSQL 16 · AWS Elastic Beanstalk, RDS, SQS, Lambda, SES, S3, ElastiCache, Secrets Manager, EventBridge, CloudWatch
+**Stack:** React 18 (Vite) · Node.js 22 / Express · PostgreSQL 16 · AWS Elastic Beanstalk, RDS, SQS, Lambda, SES, S3, ElastiCache, Secrets Manager, EventBridge, CloudWatch
 
 ---
 
@@ -38,7 +38,7 @@ Concurrency is tested: `npm run test:concurrency` sends N simultaneous reserve r
 
 ## Run it locally
 
-Requirements: Node.js 20+, Docker Desktop.
+Requirements: Node.js 22 LTS (20 also works locally), Docker Desktop.
 
 ```bash
 npm run setup          # installs root, server and client dependencies
@@ -68,6 +68,17 @@ The login page has one-click demo buttons. Locally, emails are printed to the AP
 5. **Student B** → bell icon → "Now available: Clean Code" (in AWS this arrives via SQS → Lambda → SES)
 6. Librarian → Dashboard → **Run daily jobs now** → reminders / overdue notices
 
+### Tests
+
+```bash
+npm run db:up      # the tests use a separate database, library_test, on the same Postgres
+npm run lint       # ESLint: server, Lambdas, scripts
+npm test           # API tests: register/login, reserve, waitlist, return -> promotion, race,
+                   # outbox claim, password rotation, RDS TLS (node:test, no extra dependencies)
+```
+
+The tests empty `library_test` before they run (they refuse any database whose name doesn't end in `_test`). Point them elsewhere with `TEST_DATABASE_URL`. CI runs the same commands against a PostgreSQL 16 container, and nothing is built or deployed unless they pass.
+
 ### Useful commands
 
 ```bash
@@ -95,9 +106,11 @@ server/                Express API (also serves the built SPA in production)
   src/db/              schema.sql, migrate (advisory lock), seed
   .ebextensions/       Elastic Beanstalk config: ALB health check, 2-4 instances, rolling deploys, logs
   scripts/             concurrency-test.js
+  tests/               node:test API + unit tests (npm test)
+  certs/               Amazon RDS CA bundle (verified TLS to the database)
 lambda/notifier        SQS → SES (partial batch failures, DLQ)
 lambda/reminders       EventBridge → /api/internal/jobs/daily
-.github/workflows      CI/CD to Elastic Beanstalk via GitHub OIDC (no stored AWS keys)
+.github/workflows      CI/CD to Elastic Beanstalk (Learner Lab session keys; OIDC in a real account)
 docs/DEPLOYMENT.md     Step-by-step AWS setup
 ```
 
@@ -108,7 +121,7 @@ Every AWS integration is optional and turned on by an environment variable, so t
 | Variable | AWS service | Without it |
 |---|---|---|
 | `DB_SECRET_ARN` / `RDS_*` / `DATABASE_URL` | RDS PostgreSQL + Secrets Manager | local Docker Postgres |
-| `DATABASE_READ_URL` | RDS read replica for catalogue browsing | primary only |
+| `DB_READ_HOST` (or `DATABASE_READ_URL`) | RDS read replica for catalogue browsing (same secret as the primary) | primary only |
 | `SQS_QUEUE_URL` | SQS → Lambda → SES | console email |
 | `SES_FROM_EMAIL` + `SES_DIRECT=true` | SES straight from the app | console email |
 | `S3_BUCKET` | private S3 + presigned cover URLs | `server/uploads` |

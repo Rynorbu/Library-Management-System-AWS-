@@ -88,8 +88,11 @@ CREATE TABLE IF NOT EXISTS notifications (
   error       TEXT,
   read_at     TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  sent_at     TIMESTAMPTZ
+  sent_at     TIMESTAMPTZ,
+  claimed_at  TIMESTAMPTZ          -- publish lease, so only one instance publishes a row
 );
+-- Databases created before the claimed_at column existed
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS notifications_user_idx ON notifications (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS notifications_pending_idx ON notifications (created_at) WHERE status = 'queued';
 

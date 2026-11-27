@@ -42,7 +42,7 @@ Optional (proposal): Interface endpoints for **SQS** and **Secrets Manager** in 
    - **Manage master credentials in AWS Secrets Manager** ✔ (this creates the secret)
    - VPC `cst-library`, subnet group above, SG `sg-db`, *Public access: No*
 3. Copy the **secret ARN** (Secrets Manager → `rds!db-…`). It holds only `username` and `password`, so also set `DB_HOST=<RDS endpoint>` and `DB_NAME=library` as EB environment properties. These are not secret.
-4. Optional: create a **read replica**. Then set `DATABASE_READ_URL=postgres://user:pass@replica-endpoint:5432/library`.
+4. Optional: create a **read replica**. Then set `DB_READ_HOST=<replica endpoint>`. The replica pool uses the same Secrets Manager secret, so it keeps working after a password rotation. (`DATABASE_READ_URL=postgres://user:pass@replica-endpoint:5432/library` still works, but it puts the password in an env var and breaks on rotation.)
 
 The app creates the schema on boot. The migration uses an advisory lock, so several instances can start together safely. Set `SEED_ON_START=true` for the first deploy only if you want the demo data in AWS.
 
@@ -65,13 +65,13 @@ The app creates the schema on boot. The migration uses an advisory lock, so seve
 
 ### Lambda: notifier
 1. Run `npm run package` locally → `build/lambda-notifier.zip`.
-2. Lambda → Create function `library-notifier`, Node.js 20.x, upload the zip, handler `index.handler`.
+2. Lambda → Create function `library-notifier`, Node.js 22.x, upload the zip, handler `index.handler`.
 3. Execution role permissions: `AWSLambdaSQSQueueExecutionRole` + `ses:SendEmail` on your identity.
 4. Environment: `SES_FROM_EMAIL`, `APP_URL=https://<your-domain-or-EB-URL>`, `INTERNAL_API_TOKEN=<same as EB>`.
 5. Add trigger → SQS `library-notifications`, batch size 10, **Report batch item failures ✔**.
 
 ### Lambda: daily reminders
-1. Create `library-daily-reminders` (Node.js 20.x) from `build/lambda-reminders.zip`, timeout 30 s.
+1. Create `library-daily-reminders` (Node.js 22.x) from `build/lambda-reminders.zip`, timeout 30 s.
 2. Environment: `APP_URL`, `INTERNAL_API_TOKEN`.
 3. EventBridge → **Scheduler** → create schedule `library-daily`, cron `0 2 * * ? *` (08:00 Bhutan time), target this Lambda, retry 2 times.
 
@@ -100,7 +100,7 @@ No access keys go in the code or environment. The AWS SDK picks up the instance 
 ### Create the environment
 1. `npm run package` → `build/library-app.zip`
 2. EB → Create application `cst-library` → Web server environment `cst-library-prod`
-   - Platform **Node.js 20 on Amazon Linux 2023**, upload `library-app.zip`
+   - Platform **Node.js 22 on Amazon Linux 2023**, upload `library-app.zip`
    - *Configure more options*:
      - **Network:** VPC `cst-library`; load balancer in **public** subnets; instances in **private app** subnets; public IP **off**
      - **Capacity:** Load balanced, min 2, max 4 (`.ebextensions` sets this too)
@@ -130,10 +130,22 @@ Route 53 → hosted zone → `A` alias record → the EB environment / ALB. Requ
 
 ## 7. CI/CD: GitHub Actions
 
-1. IAM → Identity providers → add `token.actions.githubusercontent.com` (OIDC).
-2. Create role `github-actions-library-deploy` that trusts your repo (`repo:<owner>/<repo>:ref:refs/heads/main`). Give it permissions for Elastic Beanstalk deploy, the EB S3 bucket, and `lambda:UpdateFunctionCode` on the two functions.
-3. In the repo, set the **Variables** listed at the top of `.github/workflows/deploy.yml`.
-4. Push to `main` → build → package → upload → rolling deploy → wait → smoke test `/api/health`.
+> **AWS Academy Learner Lab:** the lab blocks IAM identity providers and roles, so the workflow signs in with the lab's **session keys** stored as GitHub secrets instead (`implementation.md` §12). The OIDC setup below is the **real-account design**.
+
+1. IAM → Identity providers → add `token.actions.githubusercontent.com` (OIDC), audience `sts.amazonaws.com`.
+2. Create role `github-actions-library-deploy` that trusts your repo. The deploy job runs in the `production` **environment**, so the token's subject is the environment, not the branch:
+   ```json
+   "Condition": {
+     "StringEquals": {
+       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+       "token.actions.githubusercontent.com:sub": "repo:<owner>/<repo>:environment:production"
+     }
+   }
+   ```
+   (`repo:<owner>/<repo>:ref:refs/heads/main` would never match, and the login would fail.) Give the role permissions for the Elastic Beanstalk deploy, the EB S3 bucket, and `lambda:UpdateFunctionCode` on the two functions.
+3. In the workflow, swap the session-key login for `role-to-assume` (the snippet is in the header of `.github/workflows/deploy.yml`) and add `id-token: write` to `permissions`.
+4. In the repo, set the **Variables** listed at the top of `.github/workflows/deploy.yml`.
+5. Push to `main` → build → package → upload → rolling deploy → wait → smoke test `/api/health`.
    If health checks fail, Elastic Beanstalk rolls back automatically and the workflow fails.
 
 ## 8. Monitoring: CloudWatch + SNS

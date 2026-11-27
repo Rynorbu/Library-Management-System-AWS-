@@ -1,43 +1,113 @@
-# CI/CD: build -> package -> deploy to Elastic Beanstalk (rolling, auto-rollback on failed health checks)
+# CI/CD: test -> build -> package -> deploy to Elastic Beanstalk (rolling, auto-rollback on failed health checks)
 #
-# Uses GitHub OIDC to assume an IAM role - no AWS access keys are stored in GitHub.
-# Repository variables (Settings -> Secrets and variables -> Actions -> Variables):
-#   AWS_REGION            ap-south-1
-#   AWS_DEPLOY_ROLE_ARN   arn:aws:iam::<account>:role/github-actions-library-deploy
-#   EB_APPLICATION        cst-library
-#   EB_ENVIRONMENT        cst-library-prod
-#   EB_BUCKET             elasticbeanstalk-ap-south-1-<account>
-#   APP_URL               https://your-domain   (smoke test)
-name: Deploy to Elastic Beanstalk
+# AWS Academy Learner Lab edition (implementation.md Part 12)
+# ------------------------------------------------------------
+# The lab blocks IAM identity providers and role creation, so GitHub cannot use OIDC.
+# Instead the workflow signs in with the lab's temporary session keys, stored as
+# repository SECRETS. They expire when the lab session ends (~4 h), so Person A
+# refreshes them at the start of every session that deploys (implementation.md §12.3).
+#
+# Secrets (Settings -> Secrets and variables -> Actions -> Secrets):
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN
+# Variables (Settings -> Secrets and variables -> Actions -> Variables):
+#   AWS_REGION       us-east-1
+#   EB_APPLICATION   cst-library
+#   EB_ENVIRONMENT   cst-library-prod
+#   EB_BUCKET        elasticbeanstalk-us-east-1-<account-id>
+#   APP_URL          https://dxxxx.cloudfront.net   (smoke test)
+#
+# Real-account design (for the report): replace the three secrets with GitHub OIDC.
+#   permissions: id-token: write
+#   - uses: aws-actions/configure-aws-credentials@v4
+#     with:
+#       role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+#       aws-region: ${{ vars.AWS_REGION }}
+#   The role's trust policy must allow  repo:<owner>/<repo>:environment:production
+#   (the deploy job runs in the "production" environment, so that is the token's subject).
+name: CI/CD
 
 on:
-  push:
+  pull_request:
     branches: [main]
   workflow_dispatch:
+  # Hand-off H4: switch this back on once Person A has put the lab keys and variables
+  # in GitHub (TEAM-README §5). Until then deploys run only from Actions -> Run workflow.
+  # push:
+  #   branches: [main]
 
 permissions:
-  id-token: write
   contents: read
 
 concurrency:
-  group: deploy-production
-  cancel-in-progress: false
+  # PR runs cancel each other; deploys queue one after another and are never cancelled.
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || 'deploy-production' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  # Code fix C4: lint + API tests against a real PostgreSQL 16. Nothing is built or
+  # deployed unless this passes.
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: library
+          POSTGRES_PASSWORD: library
+          POSTGRES_DB: library_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U library -d library_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://library:library@localhost:5432/library_test
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
 
       - name: Install dependencies
         run: |
-          npm ci || npm install
-          npm --prefix server ci || npm --prefix server install
-          npm --prefix client ci || npm --prefix client install
+          npm ci --no-audit --no-fund
+          npm --prefix server ci --no-audit --no-fund
+
+      - name: Lint (ESLint)
+        run: npm run lint
+
+      - name: API tests (PostgreSQL 16)
+        run: npm test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci --no-audit --no-fund
+          npm --prefix server ci --no-audit --no-fund
+          npm --prefix client ci --no-audit --no-fund
 
       - name: Build and package
         run: npm run package
@@ -46,50 +116,82 @@ jobs:
         with:
           name: bundle
           path: build/*.zip
+          retention-days: 7
 
   deploy:
     needs: build
+    # Pull requests only test and build; deploys come from "Run workflow" (and, after H4, pushes to main)
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    environment: production
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    env:
+      EB_APPLICATION: ${{ vars.EB_APPLICATION }}
+      EB_ENVIRONMENT: ${{ vars.EB_ENVIRONMENT }}
+      EB_BUCKET: ${{ vars.EB_BUCKET }}
+      APP_URL: ${{ vars.APP_URL }}
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: bundle
           path: build
 
+      # Learner Lab: temporary session keys (expire with the lab session).
+      # "ExpiredToken" / "InvalidClientTokenId" here = refresh the 3 secrets (§12.3) and re-run.
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true
 
       - name: Upload bundle and create application version
         run: |
           VERSION="v-${GITHUB_SHA::7}-$(date +%Y%m%d%H%M%S)"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          aws s3 cp build/library-app.zip "s3://${{ vars.EB_BUCKET }}/cst-library/$VERSION.zip"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          aws s3 cp build/library-app.zip "s3://$EB_BUCKET/cst-library/$VERSION.zip" --only-show-errors
+          # The description is built from the commit SHA only: a commit message could contain
+          # quotes, newlines or shell syntax, and EB rejects descriptions over 200 characters.
           aws elasticbeanstalk create-application-version \
-            --application-name "${{ vars.EB_APPLICATION }}" \
+            --application-name "$EB_APPLICATION" \
             --version-label "$VERSION" \
-            --source-bundle S3Bucket="${{ vars.EB_BUCKET }}",S3Key="cst-library/$VERSION.zip" \
-            --description "${{ github.event.head_commit.message || 'manual deploy' }}" | head -c 0
+            --source-bundle S3Bucket="$EB_BUCKET",S3Key="cst-library/$VERSION.zip" \
+            --description "commit ${GITHUB_SHA::7}" > /dev/null
+          echo "Created application version $VERSION"
 
       - name: Deploy (rolling with additional batch)
         run: |
           aws elasticbeanstalk update-environment \
-            --environment-name "${{ vars.EB_ENVIRONMENT }}" \
+            --environment-name "$EB_ENVIRONMENT" \
             --version-label "$VERSION" > /dev/null
-          aws elasticbeanstalk wait environment-updated --environment-names "${{ vars.EB_ENVIRONMENT }}"
-          HEALTH=$(aws elasticbeanstalk describe-environments --environment-names "${{ vars.EB_ENVIRONMENT }}" \
-            --query 'Environments[0].[Health,VersionLabel]' --output text)
-          echo "Environment: $HEALTH"
-          echo "$HEALTH" | grep -q "$VERSION" || { echo "::error::Deployment rolled back by Elastic Beanstalk"; exit 1; }
+          echo "Deploying $VERSION to $EB_ENVIRONMENT"
+          # Poll instead of "aws elasticbeanstalk wait environment-updated": that waiter gives up
+          # after ~6.5 min, and a rolling deploy with an additional batch often takes longer.
+          sleep 30
+          STATUS=""
+          for i in $(seq 1 90); do   # up to ~30 min
+            STATUS=$(aws elasticbeanstalk describe-environments --environment-names "$EB_ENVIRONMENT" \
+              --query 'Environments[0].Status' --output text)
+            [ "$STATUS" = "Ready" ] && break
+            echo "  $(date +%T) environment status: $STATUS"
+            sleep 20
+          done
+          [ "$STATUS" = "Ready" ] || { echo "::error::Timed out waiting for $EB_ENVIRONMENT (last status: $STATUS)"; exit 1; }
+          read -r HEALTH RUNNING <<< "$(aws elasticbeanstalk describe-environments --environment-names "$EB_ENVIRONMENT" \
+            --query 'Environments[0].[Health,VersionLabel]' --output text)"
+          echo "Health: $HEALTH | running version: $RUNNING"
+          [ "$RUNNING" = "$VERSION" ] || { echo "::error::Elastic Beanstalk rolled back to $RUNNING (health checks failed)"; exit 1; }
 
       - name: Smoke test
         if: ${{ vars.APP_URL != '' }}
-        run: curl --fail --retry 5 --retry-delay 10 "${{ vars.APP_URL }}/api/health"
+        run: curl --fail --silent --show-error --retry 5 --retry-delay 10 --retry-all-errors "$APP_URL/api/health"
 
       - name: Update Lambda functions
         continue-on-error: true
         run: |
           aws lambda update-function-code --function-name library-notifier --zip-file fileb://build/lambda-notifier.zip > /dev/null
           aws lambda update-function-code --function-name library-daily-reminders --zip-file fileb://build/lambda-reminders.zip > /dev/null
+          echo "Lambda functions updated"
