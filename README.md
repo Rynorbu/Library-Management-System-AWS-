@@ -68,6 +68,17 @@ The login page has one-click demo buttons. Locally, emails are printed to the AP
 5. **Student B** → bell icon → "Now available: Clean Code" (in AWS this arrives via SQS → Lambda → SES)
 6. Librarian → Dashboard → **Run daily jobs now** → reminders / overdue notices
 
+### Tests
+
+```bash
+npm run db:up      # the tests use a separate database, library_test, on the same Postgres
+npm run lint       # ESLint: server, Lambdas, scripts
+npm test           # API tests: register/login, reserve, waitlist, return -> promotion, race,
+                   # outbox claim, password rotation, RDS TLS (node:test, no extra dependencies)
+```
+
+The tests empty `library_test` before they run (they refuse any database whose name doesn't end in `_test`). Point them elsewhere with `TEST_DATABASE_URL`. CI runs the same commands against a PostgreSQL 16 container, and nothing is built or deployed unless they pass.
+
 ### Useful commands
 
 ```bash
@@ -95,6 +106,8 @@ server/                Express API (also serves the built SPA in production)
   src/db/              schema.sql, migrate (advisory lock), seed
   .ebextensions/       Elastic Beanstalk config: ALB health check, 2-4 instances, rolling deploys, logs
   scripts/             concurrency-test.js
+  tests/               node:test API + unit tests (npm test)
+  certs/               Amazon RDS CA bundle (verified TLS to the database)
 lambda/notifier        SQS → SES (partial batch failures, DLQ)
 lambda/reminders       EventBridge → /api/internal/jobs/daily
 .github/workflows      CI/CD to Elastic Beanstalk (Learner Lab session keys; OIDC in a real account)

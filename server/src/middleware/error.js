@@ -4,7 +4,7 @@ export function notFound(req, _res, next) {
   next(new HttpError(404, `Route not found: ${req.method} ${req.originalUrl}`));
 }
 
-// eslint-disable-next-line no-unused-vars
+// Express recognises an error handler by its 4 parameters, so _next must stay
 export function errorHandler(err, req, res, _next) {
   let status = err.status || err.statusCode || 500;
   let message = err.message || 'Something went wrong';

@@ -16,7 +16,7 @@ import archiver from 'archiver';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const build = path.join(root, 'build');
 const app = path.join(build, 'app');
-const EXCLUDE = new Set(['node_modules', '.env', 'uploads', 'public']);
+const EXCLUDE = new Set(['node_modules', '.env', 'uploads', 'public', 'tests']);
 
 console.log('> building React client');
 execSync('npm run build', { cwd: path.join(root, 'client'), stdio: 'inherit' });

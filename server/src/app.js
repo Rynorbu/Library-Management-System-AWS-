@@ -47,7 +47,11 @@ export function createApp() {
   if (config.corsOrigin) app.use(cors({ origin: config.corsOrigin.split(',').map((s) => s.trim()) }));
   app.use(compression());
   app.use(express.json({ limit: '1mb' }));
-  app.use(morgan(config.isProd ? 'combined' : 'dev', { skip: (req) => req.path === '/api/health' }));
+  app.use(
+    morgan(config.isProd ? 'combined' : 'dev', {
+      skip: (req) => req.path === '/api/health' || config.nodeEnv === 'test',
+    }),
+  );
 
   // ALB / Elastic Beanstalk health check
   app.get('/api/health', async (_req, res) => {
