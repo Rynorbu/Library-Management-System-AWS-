@@ -108,7 +108,7 @@ Every AWS integration is optional and turned on by an environment variable, so t
 | Variable | AWS service | Without it |
 |---|---|---|
 | `DB_SECRET_ARN` / `RDS_*` / `DATABASE_URL` | RDS PostgreSQL + Secrets Manager | local Docker Postgres |
-| `DATABASE_READ_URL` | RDS read replica for catalogue browsing | primary only |
+| `DB_READ_HOST` (or `DATABASE_READ_URL`) | RDS read replica for catalogue browsing (same secret as the primary) | primary only |
 | `SQS_QUEUE_URL` | SQS → Lambda → SES | console email |
 | `SES_FROM_EMAIL` + `SES_DIRECT=true` | SES straight from the app | console email |
 | `S3_BUCKET` | private S3 + presigned cover URLs | `server/uploads` |

@@ -42,7 +42,7 @@ Optional (proposal): Interface endpoints for **SQS** and **Secrets Manager** in 
    - **Manage master credentials in AWS Secrets Manager** ✔ (this creates the secret)
    - VPC `cst-library`, subnet group above, SG `sg-db`, *Public access: No*
 3. Copy the **secret ARN** (Secrets Manager → `rds!db-…`). It holds only `username` and `password`, so also set `DB_HOST=<RDS endpoint>` and `DB_NAME=library` as EB environment properties. These are not secret.
-4. Optional: create a **read replica**. Then set `DATABASE_READ_URL=postgres://user:pass@replica-endpoint:5432/library`.
+4. Optional: create a **read replica**. Then set `DB_READ_HOST=<replica endpoint>`. The replica pool uses the same Secrets Manager secret, so it keeps working after a password rotation. (`DATABASE_READ_URL=postgres://user:pass@replica-endpoint:5432/library` still works, but it puts the password in an env var and breaks on rotation.)
 
 The app creates the schema on boot. The migration uses an advisory lock, so several instances can start together safely. Set `SEED_ON_START=true` for the first deploy only if you want the demo data in AWS.
 

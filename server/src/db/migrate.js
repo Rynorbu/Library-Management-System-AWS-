@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { initDb, getPool, closeDb } from './index.js';
+import { initDb, connect, closeDb } from './index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_LOCK_ID = 727_001;
@@ -12,7 +12,7 @@ const MIGRATION_LOCK_ID = 727_001;
  */
 export async function migrate() {
   const sql = await readFile(path.join(__dirname, 'schema.sql'), 'utf8');
-  const client = await getPool().connect();
+  const client = await connect();
   try {
     await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_ID]);
     await client.query(sql);
