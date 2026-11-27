@@ -1,0 +1,36 @@
+%% Figure 2: Reservation sequence (row lock, transactional outbox, SQS -> Lambda -> SES, status callback)
+sequenceDiagram
+    autonumber
+    actor S as Student (browser)
+    participant CF as CloudFront + WAF
+    participant App as App on Elastic Beanstalk<br/>(EC2 behind the ALB)
+    participant DB as RDS PostgreSQL<br/>(primary)
+    participant Q as SQS<br/>library-notifications
+    participant L as Lambda<br/>library-notifier
+    participant SES as Amazon SES
+    actor In as Student inbox
+
+    S->>CF: POST /api/reservations { bookId } over HTTPS
+    CF->>App: forward via ALB (HTTP 80 then 8080, CloudFront prefix list only)
+    App->>DB: BEGIN
+    App->>DB: SELECT ... FROM books WHERE id = $1 FOR UPDATE
+    Note over App,DB: A second request for the same book waits here,<br/>then sees 0 copies and joins the waitlist
+    alt a copy is free
+        App->>DB: INSERT reservation (reserved, pickup deadline now + 48 h)<br/>UPDATE books SET available_copies = available_copies - 1
+    else no copy is free
+        App->>DB: INSERT reservation (waitlisted, created_at = clock_timestamp())
+    end
+    App->>DB: INSERT notifications (outbox row, same transaction)
+    App->>DB: COMMIT
+    App-->>S: 201 Reserved, or You are number n on the waitlist
+    App->>Q: SendMessage (after COMMIT, in the background)
+    App->>DB: UPDATE notifications SET status = 'published'
+    Q->>L: trigger (batch of up to 10)
+    L->>SES: SendEmail
+    SES->>In: email delivered
+    L->>App: POST /api/internal/notifications/{id}/status sent<br/>(X-Internal-Token, through CloudFront)
+    App->>DB: UPDATE notifications SET status = 'sent'
+    opt SES fails
+        L-->>Q: batchItemFailures (only that message is retried)
+        Note over Q: after 3 receives the message moves to the DLQ,<br/>the DLQ alarm fires and SNS emails the team,<br/>and the Lambda reports status failed
+    end

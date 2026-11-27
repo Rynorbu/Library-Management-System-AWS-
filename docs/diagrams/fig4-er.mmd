@@ -1,0 +1,90 @@
+%% Figure 4: Entity-relationship diagram (server/src/db/schema.sql, PostgreSQL 16)
+erDiagram
+    users ||--o{ reservations : "makes"
+    books ||--o{ reservations : "is reserved in"
+    users ||--o{ loans : "borrows"
+    books ||--o{ loans : "is lent in"
+    reservations |o--o| loans : "is fulfilled by"
+    users |o--o{ loans : "checks out / in (librarian)"
+    users ||--o{ notifications : "receives"
+    users |o--o{ activity_log : "acts in / is subject of"
+    books |o--o{ activity_log : "is logged in"
+
+    users {
+        int id PK
+        text name
+        text email UK "unique on lower(email)"
+        text password_hash "bcrypt"
+        text role "student, staff or librarian"
+        text student_id
+        text department
+        boolean is_active
+        timestamptz created_at
+    }
+    books {
+        int id PK
+        text isbn UK
+        text title
+        text author
+        text publisher
+        int published_year
+        text category
+        text description
+        text cover_url "external image"
+        text cover_key "S3 object key"
+        text shelf_location
+        int total_copies "at least 0"
+        int available_copies "between 0 and total_copies"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    reservations {
+        int id PK
+        int user_id FK
+        int book_id FK
+        text status "reserved, waitlisted, fulfilled, cancelled, expired"
+        timestamptz reserved_at
+        timestamptz pickup_deadline "48 h after reserved_at"
+        timestamptz reminder_sent_at
+        timestamptz created_at "waitlist order (FIFO)"
+        timestamptz updated_at
+    }
+    loans {
+        int id PK
+        int user_id FK
+        int book_id FK
+        int reservation_id FK "null for walk-in loans"
+        timestamptz checked_out_at
+        timestamptz due_at "14 days, renewable once"
+        timestamptz returned_at "null while on loan"
+        int renewals
+        int checked_out_by FK "librarian"
+        int checked_in_by FK "librarian"
+        timestamptz reminder_sent_at
+        timestamptz overdue_notice_at
+    }
+    notifications {
+        int id PK
+        int user_id FK
+        text type
+        text recipient
+        text subject
+        text body
+        text html
+        text status "queued, published, sent, failed"
+        int attempts
+        text error
+        timestamptz read_at
+        timestamptz created_at
+        timestamptz sent_at
+        timestamptz claimed_at "publish lease (C2)"
+    }
+    activity_log {
+        int id PK
+        int actor_id FK
+        text action
+        int book_id FK
+        int user_id FK
+        jsonb details
+        timestamptz created_at
+    }
